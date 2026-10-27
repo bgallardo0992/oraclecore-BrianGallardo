@@ -1,6 +1,6 @@
 # STATUS — Estado real del repositorio
 
-Estados: **Hecho**, **Parcial**, **No hecho**. Última actualización: 2026-10-26 (hasta la Fase C).
+Estados: **Hecho**, **Parcial**, **No hecho**. Última actualización: 2026-10-26 (hasta la Fase D).
 
 **Cómo se verificó cada punto** (se indica en la columna *Verificación*):
 - **SQL*Plus**: ejecutado por la IA (Claude Code) contra el contenedor `oracle-core` del candidato, con salida revisada.
@@ -16,7 +16,7 @@ Estados: **Hecho**, **Parcial**, **No hecho**. Última actualización: 2026-10-2
 | A.4 JSON por ItemId | Hecho | SQL*Plus + DBeaver | `obtener_item_json`, 9 claves, nulos como `null`, ítem inexistente → `-20101`. J1–J6 OK en DBeaver. Commit `6c96337`. |
 | B Consulta de cliente por cuenta | Hecho | SQL*Plus + DBeaver | Una fila por cuenta; `LISTAGG`; cuenta inexistente → 0 filas. 5 cuentas OK en DBeaver. Commit `b75dc94`. |
 | C Transferencia bancaria | Hecho | SQL*Plus + DBeaver | `PKG_CORE_SETTLEMENT.transferir` implementado: validaciones, `FOR UPDATE` en orden ascendente, `SAVEPOINT`, referencia única, falla simulada tras el débito. `test_c_transferencias.sql` (todas OK) y los 6 casos del enunciado (`casos_c_manual.sql`) verificados por la IA en SQL*Plus. `test_c_transferencias.sql` además OK en DBeaver (todas las líneas, con el ROLLBACK final); `casos_c_manual.sql` (los 6 casos del enunciado) y `restablecer_casos_c.sql` también OK en DBeaver. **No probado con dos sesiones concurrentes reales**: la ausencia de deadlock se apoya en el orden de bloqueo, no en una prueba. No hay procedimiento de reversa (opcional). |
-| D Propuesta de mejora | No hecho | — | Falta redactarla (máx. 20 líneas) y ponerla en el README. |
+| D Propuesta de mejora | Hecho | Revisión del candidato | Redactada en el README (11 puntos, dentro del máximo de 20 líneas, sin código). Ajustada tras la revisión del candidato: validación solo lectura (sin savepoint) y reversión compensatoria con auditoría de solo inserción. Los plazos y metas son estimaciones iniciales a confirmar con el equipo. |
 | A.5 Carga masiva (BULK COLLECT / FORALL) | No hecho | — | P2, se aborda solo tras C y D. Resultado de control esperado: 5 cargados / 7 rechazados. |
 | `TTEM_AUDIT_LOG` (bitácora con valores anteriores, opcional) | No hecho | — | La auditoría actual guarda usuario y fecha en la propia fila (trigger), sin valores anteriores. |
 | README, AI-LOG, STATUS, `connection.env.example` | Parcial | — | Creados. El README no tiene aún ejemplos de transferencia ni la Sección D; el AI-LOG se actualiza en cada fase. |
