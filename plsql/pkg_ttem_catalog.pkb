@@ -157,6 +157,33 @@ CREATE OR REPLACE PACKAGE BODY pkg_ttem_catalog AS
         RAISE_APPLICATION_ERROR(c_err_tecnico, 'eliminar_item: ' || SQLERRM, TRUE);
       END IF;
   END eliminar_item;
+  -- Solo lectura: no abre savepoint ni envuelve errores; los errores tecnicos se propagan tal cual.
+  PROCEDURE obtener_item_json (
+    p_item_id  IN  ttem_item.item_id%TYPE,
+    p_json     OUT CLOB) IS
+  BEGIN
+    p_json := NULL;
+    -- NULL ON NULL: los valores nulos salen como null JSON y la clave no se omite.
+    SELECT JSON_OBJECT(
+             'itemId'      VALUE i.item_id,
+             'catalogId'   VALUE i.catalog_id,
+             'catalogCode' VALUE c.catalog_code,
+             'itemCode'    VALUE i.item_code,
+             'name'        VALUE i.item_name,
+             'value'       VALUE i.item_value,
+             'status'      VALUE i.status,
+             'validFrom'   VALUE TO_CHAR(i.valid_from, 'YYYY-MM-DD'),
+             'validTo'     VALUE TO_CHAR(i.valid_to, 'YYYY-MM-DD')
+             NULL ON NULL RETURNING CLOB)
+      INTO p_json
+      FROM ttem_item i
+      JOIN ttem_catalog c ON c.catalog_id = i.catalog_id
+     WHERE i.item_id = p_item_id;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(c_err_item_no_existe,
+        'El item ' || NVL(TO_CHAR(p_item_id), 'NULL') || ' no existe');
+  END obtener_item_json;
   FUNCTION listar_items (
     p_catalog_id  IN ttem_catalog.catalog_id%TYPE)
     RETURN typ_ttem_item_tab IS

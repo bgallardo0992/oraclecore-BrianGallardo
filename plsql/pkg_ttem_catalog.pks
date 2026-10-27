@@ -10,7 +10,7 @@
 --   -20100 e_catalogo_no_existe   El catalogo indicado no existe.
 --                                 (insertar_item, listar_items)
 --   -20101 e_item_no_existe       El item indicado no existe.
---                                 (actualizar_item, eliminar_item)
+--                                 (actualizar_item, eliminar_item, obtener_item_json)
 --   -20102 e_item_duplicado       El codigo ya existe dentro del catalogo.
 --                                 (insertar_item)
 --   -20103 e_nombre_obligatorio   El nombre del item es nulo o solo espacios.
@@ -69,6 +69,12 @@ CREATE OR REPLACE PACKAGE pkg_ttem_catalog AS
   -- Eliminacion LOGICA: marca el item como inactivo (status = 'I'). Idempotente.
   PROCEDURE eliminar_item (
     p_item_id  IN ttem_item.item_id%TYPE);
+  -- A.4: devuelve en p_json (CLOB) el item como JSON con las claves itemId, catalogId,
+  -- catalogCode, itemCode, name, value, status, validFrom, validTo (fechas YYYY-MM-DD, nulos
+  -- como null JSON, sin omitir claves). Lanza e_item_no_existe (-20101) si el item no existe.
+  PROCEDURE obtener_item_json (
+    p_item_id  IN  ttem_item.item_id%TYPE,
+    p_json     OUT CLOB);
   -- Devuelve los items de un catalogo ordenados por display_order y codigo.
   FUNCTION listar_items (
     p_catalog_id  IN ttem_catalog.catalog_id%TYPE)
