@@ -45,13 +45,13 @@ BEGIN
   ELSE
     DBMS_OUTPUT.PUT_LINE('FALLA P4 status=' || l_row.status);
   END IF;
-  -- P5: un error de integridad se propaga (codigo duplicado -> ORA-00001)
+  -- P5: codigo duplicado -> error de negocio propio (en A.2 salia ORA-00001; A.3 lo traduce)
   BEGIN
     l_item := typ_ttem_item(NULL, l_cat_id, 'pen', 'Duplicado', NULL, 9, NULL, DATE '2026-01-01', NULL);
     pkg_ttem_catalog.insertar_item(l_item, l_item_id);
     DBMS_OUTPUT.PUT_LINE('FALLA P5 no rechazo el duplicado');
-  EXCEPTION WHEN DUP_VAL_ON_INDEX THEN
-    DBMS_OUTPUT.PUT_LINE('OK    P5 duplicado propagado como ORA-00001 (A.3 lo convertira en error de negocio)');
+  EXCEPTION WHEN pkg_ttem_catalog.e_item_duplicado THEN
+    DBMS_OUTPUT.PUT_LINE('OK    P5 duplicado rechazado con e_item_duplicado (ORA-20102, desde A.3)');
   END;
   ROLLBACK;
   DBMS_OUTPUT.PUT_LINE('ROLLBACK ejecutado: no quedan datos de prueba.');
