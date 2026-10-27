@@ -801,3 +801,92 @@ README, STATUS y AI-LOG ya están actualizados con la Fase D.
 2. Confirmación para hacer el commit.
 
 Luego queda la **FASE A.5** (opcional, P2: carga masiva) y el cierre: revisión integral, README final y publicación en GitHub.
+
+---
+
+## FASE D — CERRADA
+Propuesta en el README, ajustada con tus dos observaciones (validación solo lectura y reversión compensatoria con auditoría de solo inserción). Commit `6151d36`; este archivo y `context.md`, commit `e55ae31`.
+
+---
+
+## FASE A.5 — Carga masiva desde staging (P2 · 15 min de examen, opcional)
+
+### A. Objetivo
+Cargar el lote `LOTE-2026-10` de `TTEM_ITEM_STG` en `TTEM_ITEM` con `BULK COLLECT ... LIMIT` y `FORALL ... SAVE EXCEPTIONS`, rechazando los registros inválidos sin detener el lote. **Resultado de control: 5 cargados y 7 rechazados.**
+
+### B. Análisis previo (lo que pide el prompt maestro)
+| Pregunta | Decisión |
+|---|---|
+| ¿Cómo evitar duplicados dentro del lote? | Se procesa en orden de `stg_id`; un arreglo asociativo guarda la clave catálogo + código de cada fila aceptada y persiste entre bloques de `LIMIT`. Gana la primera; las demás son `DUPLICADO_LOTE`. |
+| ¿Y contra ítems existentes? | Sin consulta previa: lo detiene la UK de `TTEM_ITEM` en el `FORALL ... SAVE EXCEPTIONS` (`ORA-00001` → `DUPLICADO_EXISTENTE`). Es la garantía real ante concurrencia. |
+| ¿Cómo registrar los errores por registro? | Tabla `TTEM_LOAD_ERROR` (`stg_id`, `error_code`, `error_message`) y marca `E` en el staging; los cargados quedan en `S`. `processed_at` en ambos. Todo en bloque (`FORALL`). |
+| ¿Conflictos de concurrencia? | Cursor `FOR UPDATE NOWAIT` sobre las filas pendientes: una segunda sesión recibe `ORA-20310` al instante. Tras el commit de la primera no quedan pendientes (0 / 0). La UK protege además contra inserciones concurrentes por `PKG_TTEM_CATALOG`. |
+| ¿`COMMIT` dentro del bucle? | No: invalidaría el cursor `FOR UPDATE` (`ORA-01002`) y rompería el criterio de que el invocador controla la transacción. |
+| ¿Reutiliza `PKG_TTEM_CATALOG`? | No: llamar a `insertar_item` fila a fila anularía el `FORALL`. Las reglas (catálogo activo, código, nombre, fechas, vigencia) se **duplican** a propósito; es un costo asumido. |
+
+### C. Archivos
+| Archivo | Contenido |
+|---|---|
+| `ddl/05_ttem_load_error.sql` | `SEQ_TTEM_LOAD_ERROR`, `TTEM_LOAD_ERROR` (PK, FK a `TTEM_ITEM_STG`, índice) |
+| `plsql/pkg_ttem_load.pks` / `.pkb` | `cargar_lote` y su tabla de códigos |
+| `scripts/test_a5_carga.sql` | Pruebas con `LIMIT 4` y `LIMIT 200`, idempotencia y errores; termina con `ROLLBACK` |
+| `scripts/cargar_lote_a5.sql` | Carga **real** con `COMMIT` y consultas de verificación |
+| `scripts/restablecer_a5.sql` | Deshace la carga real (solo lo que creó el lote) |
+
+### Pasos
+| # | Tiempo | Hora real | Instrucción |
+|---|---|---|---|
+| A5.1 | 5 min | | Leer el `.pkb`: la validación fila a fila, el `FORALL` y el manejo de `SQL%BULK_EXCEPTIONS` |
+| A5.2 | 2 min | | DBeaver: ejecutar `ddl/05_ttem_load_error.sql` (Alt+X) |
+| A5.3 | 2 min | | Ejecutar `plsql/pkg_ttem_load.pks` y luego `.pkb` (Alt+X); `SELECT * FROM user_errors;` → 0 filas |
+| A5.4 | 4 min | | Ejecutar `scripts/test_a5_carga.sql` (Alt+X); revisar el panel Salida |
+| A5.5 | 5 min | | Ejecutar `scripts/cargar_lote_a5.sql` (Alt+X): `cargados=5 rechazados=7` y las pestañas de resultados |
+| A5.6 | 3 min | | Ejecutar `scripts/restablecer_a5.sql`: 3 ítems, 0 errores, 12 pendientes |
+
+> **Orden:** `test_a5_carga.sql` exige el lote sin procesar. Ejecútalo **antes** de la carga real (A5.5) o después del restablecimiento.
+> Yo ya ejecuté todo esto en tu contenedor con SQL*Plus y lo dejé restablecido: 3 ítems, 0 errores, 12 pendientes.
+
+### Resultados esperados (los verifiqué en SQL*Plus)
+| `stg_id` | Resultado | Motivo |
+|---|---|---|
+| 1, 2, 3, 4, 11 | Cargado (`S`) | `11` se normaliza: catálogo `MONEDA`, código `CHF`, nombre `franco suizo` |
+| 5 | Rechazado (`E`) | `DUPLICADO_LOTE` (gana la fila 4, valor 7.00) |
+| 6 | Rechazado | `CATALOGO_INEXISTENTE` (`TIPO_SEGURO`) |
+| 7 | Rechazado | `CODIGO_VACIO` |
+| 8 | Rechazado | `NOMBRE_VACIO` |
+| 9 | Rechazado | `FECHA_DESDE_INVALIDA` (`2026-13-01`) |
+| 10 | Rechazado | `VIGENCIA_INCOHERENTE` |
+| 12 | Rechazado | `DUPLICADO_EXISTENTE` (`PEN`; el ítem existente no se toca) |
+
+### Lo que probé y lo que no
+- **Probado en SQL*Plus:** `test_a5_carga.sql` todo `OK` (con `LIMIT 4`, donde el duplicado del lote cruza de bloque, y con `LIMIT 200`); segunda ejecución 0 / 0; lote inexistente `ORA-20311`; `p_limit = 0` `ORA-20312`; carga real con `COMMIT` y su restablecimiento; **dos sesiones reales**: la segunda recibió `ORA-20310` mientras la primera retenía el lote.
+- **Incidente mío (transparencia):** mi primera prueba de concurrencia estaba mal armada y **cargó el lote de verdad en tu base** (la consulta de bloqueo era inválida y SQL*Plus confirma al salir). Lo detecté al instante, escribí `restablecer_a5.sql` y devolví todo al estado inicial; después repetí la prueba bien. Está en el AI-LOG.
+- **No probado:** más de un bloque con errores de inserción distintos de duplicado (`ERROR_INSERCION`) ni catálogos inactivos dentro del lote (código revisado, sin caso de prueba).
+
+### Diagnóstico
+| Error | Causa | Solución |
+|---|---|---|
+| `ORA-02291` o `ORA-00942` al compilar | Falta `ddl/05_ttem_load_error.sql` | Ejecútalo antes del package |
+| `Precondicion FALLA` en el test | El lote ya está procesado | `scripts/restablecer_a5.sql` |
+| `ORA-20311` | Nombre de lote incorrecto | Comprueba `SELECT DISTINCT load_batch FROM ttem_item_stg;` |
+| `ORA-20310` | Otra pestaña tiene filas del lote bloqueadas | `COMMIT` o `ROLLBACK` en esa sesión |
+| Cargados 0 / rechazados 0 | El lote ya fue procesado (comportamiento idempotente) | Es correcto; para repetir, restablece |
+| El script de carga real queda esperando | Una transacción abierta en otra pestaña | Cierra o confirma la otra pestaña |
+
+### I. Lista de verificación
+- [ ] `user_errors` vacío para `PKG_TTEM_LOAD`
+- [ ] `test_a5_carga.sql`: todo `OK` en tu DBeaver
+- [ ] `cargar_lote_a5.sql`: `cargados=5 rechazados=7` y los 7 motivos de la tabla
+- [ ] Tras `restablecer_a5.sql`: 3 ítems, 0 errores, 12 pendientes
+- [ ] Puedes explicar: por qué los duplicados contra lo existente los detecta la UK, por qué no hay `COMMIT` en el bucle y qué hace `SAVE EXCEPTIONS`
+
+### Git y documentación
+Commit sugerido: `A.5: carga masiva del lote con BULK COLLECT, FORALL SAVE EXCEPTIONS y registro de rechazos`
+README, STATUS y AI-LOG ya se actualizaron con A.5 (STATUS: Hecho, con verificación SQL*Plus hasta que la ejecutes en DBeaver).
+
+### J. Qué debes enviarme
+1. El panel Salida de `test_a5_carga.sql`.
+2. La salida de `cargar_lote_a5.sql` (línea `cargados=5 rechazados=7` y la grilla del staging con los motivos).
+3. El resultado de `restablecer_a5.sql`.
+
+Luego queda el **cierre**: revisión integral (instalación desde cero en una base limpia), README final y publicación en GitHub.

@@ -66,6 +66,9 @@ La consulta final de `02_core_datos.sql` debe mostrar: CORE_CUSTOMER 6, CORE_ACC
 | 6 | `plsql/pkg_ttem_catalog.pkb` | Cuerpo |
 | 7 | `plsql/pkg_core_settlement.pks` | Especificación de la liquidación (Sección C) |
 | 8 | `plsql/pkg_core_settlement.pkb` | Cuerpo de la liquidación |
+| 9 | `ddl/05_ttem_load_error.sql` | Tabla `TTEM_LOAD_ERROR` y su secuencia (opcional, solo A.5) |
+| 10 | `plsql/pkg_ttem_load.pks` | Especificación de la carga masiva (A.5) |
+| 11 | `plsql/pkg_ttem_load.pkb` | Cuerpo de la carga masiva |
 
 Verificación de compilación: `SELECT * FROM user_errors;` debe devolver 0 filas.
 
@@ -86,6 +89,9 @@ Cada script termina con `ROLLBACK` y no deja datos (excepto donde se indique). E
 | `scripts/test_c_transferencias.sql` | Transferencias: 16 casos, atomicidad, savepoint | Todas las líneas `OK`; termina con `ROLLBACK` y restablece el estado inicial |
 | `scripts/casos_c_manual.sql` | Los 6 casos del enunciado, con verificación de saldos y `CORE_TRX` | Ver tabla de la Sección C. **Modifica datos** (caso 1 con `COMMIT`) |
 | `scripts/restablecer_casos_c.sql` | Deshace los datos del script manual | 11 movimientos; saldos 5250 y 350.50 |
+| `scripts/test_a5_carga.sql` | Carga del lote con `LIMIT 4` y `LIMIT 200`, idempotencia, errores | Todas `OK`; 5 cargados y 7 rechazados; termina con `ROLLBACK`. Requiere el lote sin procesar |
+| `scripts/cargar_lote_a5.sql` | Carga **real** del lote (con `COMMIT`) y consultas de verificación | `cargados=5 rechazados=7`. **Modifica datos** |
+| `scripts/restablecer_a5.sql` | Deshace la carga real | 3 ítems, 0 errores, 12 pendientes |
 
 ## Ejemplo: consulta JSON por ItemId (A.4)
 
@@ -123,6 +129,37 @@ Rango propio: **-20100 a -20199** errores de negocio del catálogo, **-20900** e
 | -20900 | `e_error_tecnico` | Error inesperado, envuelto conservando el error Oracle original en el mensaje | `insertar_item`, `actualizar_item`, `eliminar_item` |
 
 Control transaccional del package: **no hace `COMMIT`**. Cada operación de escritura abre su propio `SAVEPOINT`; ante un error hace `ROLLBACK` solo hasta ese savepoint (no revierte el trabajo previo del invocador) y relanza el error. El invocador decide `COMMIT` o `ROLLBACK`.
+
+## A.5: carga masiva desde staging (opcional, P2)
+
+`PKG_TTEM_LOAD.cargar_lote(p_load_batch, p_limit DEFAULT 200, p_cargados OUT, p_rechazados OUT)` procesa los registros con `processed_flag = 'N'` del lote (por ejemplo `LOTE-2026-10`) con `BULK COLLECT … LIMIT` y `FORALL … SAVE EXCEPTIONS`. Requiere `ddl/05_ttem_load_error.sql`. Necesita Oracle 12.2 o superior (`TO_DATE … DEFAULT NULL ON CONVERSION ERROR`); no usa nada exclusivo de 23ai.
+
+- **Normalización:** `TRIM` en todos los campos y `UPPER` en los códigos de catálogo e ítem. Las fechas deben ser `YYYY-MM-DD` estrictas; una fecha imposible como `2026-13-01` se rechaza.
+- **Duplicados:** dentro del lote gana la primera fila (menor `stg_id`) y las demás se rechazan (`DUPLICADO_LOTE`); contra los ítems existentes los detiene la clave única de `TTEM_ITEM` en el `FORALL` (`DUPLICADO_EXISTENTE`). Nunca se actualiza un ítem existente.
+- **Errores por registro:** cada rechazo se guarda en `TTEM_LOAD_ERROR` (`stg_id`, `error_code`, `error_message`) y el registro de staging queda en `E`; los aceptados quedan en `S`. `processed_at` se informa en ambos. Un registro inválido no detiene a los demás.
+- **Concurrencia:** el cursor es `FOR UPDATE NOWAIT`: una segunda sesión sobre el mismo lote recibe `ORA-20310` de inmediato; una vez confirmado el primero, no quedan pendientes y devuelve 0 / 0.
+- **Transacción:** igual que el resto: no hace `COMMIT`; el invocador decide. `SAVEPOINT` propio (`sp_cargar_lote`).
+
+Resultado de control verificado con el modelo mínimo (`LOTE-2026-10`): **5 cargados** (EUR, GBP, COM_ATM, COM_TRF_INT con valor 7.00, CHF normalizado) y **7 rechazados**:
+
+| `stg_id` | Registro | Motivo (`error_code`) |
+|---|---|---|
+| 5 | `COM_TRF_INT` repetido (7.50) | `DUPLICADO_LOTE` |
+| 6 | catálogo `TIPO_SEGURO` | `CATALOGO_INEXISTENTE` |
+| 7 | código vacío | `CODIGO_VACIO` |
+| 8 | nombre vacío (`COM_SOB`) | `NOMBRE_VACIO` |
+| 9 | fecha `2026-13-01` (`JPY`) | `FECHA_DESDE_INVALIDA` |
+| 10 | hasta `2026-06-30` anterior a desde `2026-12-01` (`COM_EXT`) | `VIGENCIA_INCOHERENTE` |
+| 12 | `PEN` ya existe | `DUPLICADO_EXISTENTE` |
+
+Otros motivos posibles: `CATALOGO_VACIO`, `CATALOGO_INACTIVO`, `FECHA_HASTA_INVALIDA`, `ERROR_INSERCION`.
+
+| Código | Excepción | Significado |
+|---|---|---|
+| -20310 | `e_lote_en_proceso` | Otra sesión tiene bloqueadas las filas pendientes del lote |
+| -20311 | `e_lote_no_existe` | No hay registros de staging con ese lote |
+| -20312 | `e_limite_invalido` | `p_limit` nulo o menor que 1 |
+| -20902 | `e_error_tecnico_carga` | Error inesperado envuelto, con el error Oracle original |
 
 ## Sección B: consulta de cliente por cuenta
 
