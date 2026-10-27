@@ -33,6 +33,11 @@
 | JSON | `JSON_OBJECT … NULL ON NULL RETURNING CLOB` | Función nativa, escapa caracteres especiales, mantiene las claves con valor `null`. |
 | Cuenta inexistente (B) | 0 filas, sin error | Comportamiento natural de un `SELECT`. |
 | Nombre normalizado (B) | `INITCAP` solo en personas naturales; la razón social solo se limpia | Respeta `S.A.C.` / `E.I.R.L.`. Limitación: `De`/`Del` quedan en mayúscula. |
+| Control transaccional de la transferencia (C) | El **invocador** hace `COMMIT`/`ROLLBACK`; `transferir` solo usa `SAVEPOINT sp_transferir` y `ROLLBACK TO` ante error | Evita confirmar sin querer trabajo ajeno del invocador. El rollback a savepoint deshace débito, acreditación e insert de esa llamada y libera sus bloqueos, sin tocar lo previo. |
+| Bloqueo de cuentas (C) | Dos `SELECT … FOR UPDATE` separados, primero la cuenta con menor número | Un solo `SELECT … ORDER BY … FOR UPDATE` no garantiza el orden en que se bloquean las filas; con dos consultas el orden es explícito y evita deadlocks `A→B` / `B→A`. |
+| Idempotencia (C) | Se consulta la referencia antes de bloquear y se traduce `DUP_VAL_ON_INDEX` en el insert | Rechazo limpio de la repetición y protección real ante la carrera entre sesiones. |
+| Falla simulada (C) | Se lanza `-20208` entre el débito y la acreditación, antes de pedir el id a `SEQ_CORE_TRX` | La secuencia no se consume en ese camino; igualmente los valores de una secuencia nunca se revierten con `ROLLBACK`. |
+| Códigos de la liquidación | -20200…-20209 negocio y -20901 técnico | Separados del rango del catálogo (-20100…-20107, -20900). |
 | Regla de catálogo inactivo | **Decisión del candidato:** no admite ítems nuevos (`-20107`) | La IA había propuesto dejarlo permitido por no estar en el enunciado; el candidato pidió convertirlo en regla. |
 | Supuestos de datos | `valid_from` obligatorio; `COM_MANT = '12.50'` | El enunciado no los define; ver `STATUS.md`. |
 
@@ -49,6 +54,9 @@ Texto exacto de los mensajes del candidato, qué devolvió la herramienta y qué
 | 5 | «un catálogo inactivo no impide insertar ítems, porque el enunciado no lo pide. crear una regla. Realizar commit de A.3» | Nuevo código `-20107`, `validar_catalogo_activo`, pruebas V16/V17 y commit de A.3. | Decisión de negocio del candidato incorporada. |
 | 6 | «no me esta escribiendo nada en la vista de salida.» | Diagnóstico paso a paso del panel de salida de DBeaver. | El candidato activó la salida del servidor y las pruebas J1–J6 se vieron en DBeaver. |
 | 7 | «escribe los archivos faltantes y anota el registro de como estamos trabajando, en cada archivo correspondiente.» | README, STATUS, AI-LOG y `connection.env.example`. | Este archivo. |
+| 8 | «realiza el commit de los archivos y procede con la siguiente fase.» | Commit de la documentación y Fase C: `PKG_CORE_SETTLEMENT`, 16 casos automáticos, los 6 casos del enunciado y un script para restablecer datos. | Pendiente que el candidato los ejecute en DBeaver. |
+
+Nota de transparencia (Fase C): para probar `casos_c_manual.sql` la IA lo ejecutó una vez en la base del candidato (con `COMMIT` del caso 1) y luego aplicó `restablecer_casos_c.sql`; los datos volvieron a 11 movimientos y saldos 5250,00 / 350,50. La secuencia `SEQ_CORE_TRX` ya no está en 1000 porque las secuencias no se revierten.
 
 ## 5. Código de IA rechazado o corregido
 
@@ -59,7 +67,8 @@ Texto exacto de los mensajes del candidato, qué devolvió la herramienta y qué
 5. **Manejo de errores provisional de A.2:** `RAISE NO_DATA_FOUND` y errores de integridad crudos (`ORA-00001`). Se reemplazaron en A.3 por excepciones de negocio con código propio; la prueba P5 se actualizó.
 6. **Prueba V13 mal planteada (A.3):** pasaba un valor de 250 caracteres a un atributo del Object Type de 200; el error saltaba al construir el objeto, no en el package. Se movió a `test_a3_error_tecnico.sql`, que fuerza una falla de entorno agotando `SEQ_TTEM_ITEM` y la restaura.
 7. **Prueba J6 (A.4):** el parámetro `OUT` conservaba el JSON anterior porque Oracle no lo copia ante una excepción. La prueba ahora lo pone en nulo antes de llamar; el comportamiento queda documentado.
-8. **Patrones vigilados:** no se usa `WHEN OTHERS THEN NULL`; todos los `WHEN OTHERS` hacen rollback y relanzan; no hay SQL dinámico con datos del usuario (el único `EXECUTE IMMEDIATE`, en la prueba del error técnico, concatena un número leído del diccionario de datos y restaura la secuencia aunque falle).
+8. **`test_c_transferencias.sql` (Fase C) fallaba en DBeaver con `ORA-06550 / PLS-00103`:** la primera versión declaraba varias funciones y procedimientos locales (`foto`, `saldo`, `r`, `rechazo`); DBeaver cortó el bloque en la línea 39 (`END saldo;`) y envió un bloque incompleto, algo que SQL*Plus no hace y que la IA no había anticipado (solo se había probado en SQL*Plus). Se reescribió sin subprogramas locales: bucle sobre una tabla de casos y comprobaciones directas. Verificado de nuevo en SQL*Plus; pendiente de ejecutar en DBeaver. Lección: probar los scripts en el cliente real (DBeaver) antes de darlos por buenos.
+9. **Patrones vigilados:** no se usa `WHEN OTHERS THEN NULL`; todos los `WHEN OTHERS` hacen rollback y relanzan; no hay SQL dinámico con datos del usuario (el único `EXECUTE IMMEDIATE`, en la prueba del error técnico, concatena un número leído del diccionario de datos y restaura la secuencia aunque falle).
 
 ## 6. Estimación de participación de la IA
 

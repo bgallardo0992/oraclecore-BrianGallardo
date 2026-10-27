@@ -64,6 +64,8 @@ La consulta final de `02_core_datos.sql` debe mostrar: CORE_CUSTOMER 6, CORE_ACC
 | 4 | `ddl/04_ttem_tipos.sql` | `TYP_TTEM_ITEM`, `TYP_TTEM_ITEM_TAB` |
 | 5 | `plsql/pkg_ttem_catalog.pks` | Especificación |
 | 6 | `plsql/pkg_ttem_catalog.pkb` | Cuerpo |
+| 7 | `plsql/pkg_core_settlement.pks` | Especificación de la liquidación (Sección C) |
+| 8 | `plsql/pkg_core_settlement.pkb` | Cuerpo de la liquidación |
 
 Verificación de compilación: `SELECT * FROM user_errors;` debe devolver 0 filas.
 
@@ -81,6 +83,9 @@ Cada script termina con `ROLLBACK` y no deja datos (excepto donde se indique). E
 | `scripts/test_a3_error_tecnico.sql` | Error técnico `-20900` | T-TEC `OK`. Hace `ALTER SEQUENCE` (commit implícito): ejecutar sin trabajo pendiente |
 | `scripts/test_a4_json.sql` | JSON por `ItemId` | J1–J6 `OK` |
 | `scripts/test_b_cuentas.sql` | Consulta de la Sección B | 5 filas con `RESULTADO = OK` (grilla, sin `DBMS_OUTPUT`) |
+| `scripts/test_c_transferencias.sql` | Transferencias: 16 casos, atomicidad, savepoint | Todas las líneas `OK`; termina con `ROLLBACK` y restablece el estado inicial |
+| `scripts/casos_c_manual.sql` | Los 6 casos del enunciado, con verificación de saldos y `CORE_TRX` | Ver tabla de la Sección C. **Modifica datos** (caso 1 con `COMMIT`) |
+| `scripts/restablecer_casos_c.sql` | Deshace los datos del script manual | 11 movimientos; saldos 5250 y 350.50 |
 
 ## Ejemplo: consulta JSON por ItemId (A.4)
 
@@ -103,7 +108,7 @@ Las fechas salen como `YYYY-MM-DD` y los valores nulos como `null` (la clave no 
 
 ## Códigos de error propios (A.3)
 
-Rango propio: **-20100 a -20199** errores de negocio del catálogo, **-20900** error técnico. Se reserva -20200 a -20299 para la liquidación (Sección C, aún no implementada).
+Rango propio: **-20100 a -20199** errores de negocio del catálogo, **-20900** error técnico. La liquidación (Sección C) usa -20200 a -20299 y -20901 (ver más abajo).
 
 | Código | Excepción | Significado | Lo generan |
 |---|---|---|---|
@@ -137,7 +142,40 @@ Resultados verificados para las cuentas de prueba:
 
 ## Sección C: transferencia bancaria
 
-Pendiente. Ver [STATUS.md](STATUS.md).
+`PKG_CORE_SETTLEMENT.transferir(p_cuenta_origen, p_cuenta_destino, p_monto, p_moneda, p_referencia, p_descripcion, p_simular_falla, p_trx_id OUT)` (firma sugerida por el enunciado; está en un package propio porque la liquidación trabaja sobre las tablas del core y la Sección A sobre los catálogos `TTEM_*`).
+
+**Quién controla la transacción: el invocador.** El procedimiento **no hace `COMMIT`**. Abre el `SAVEPOINT sp_transferir` y, ante cualquier error, hace `ROLLBACK TO sp_transferir`: deshace el débito, la acreditación y el insert de **esa** llamada (y libera sus bloqueos) sin tocar lo que el invocador hizo antes, y relanza el error. Si la operación termina bien, el cambio queda pendiente hasta que el invocador confirme. Los valores de `SEQ_CORE_TRX` no se revierten con el rollback (pueden quedar huecos de numeración).
+
+**Bloqueo:** `SELECT … FOR UPDATE` de ambas cuentas en orden ascendente de número de cuenta, para que `A→B` y `B→A` simultáneas no provoquen un deadlock. **Idempotencia:** la referencia repetida se rechaza antes de tocar las cuentas; la restricción única `UK_CORE_TRX_REFERENCE` cubre la carrera entre sesiones.
+
+| Código | Excepción | Significado |
+|---|---|---|
+| -20200 | `e_monto_invalido` | Monto nulo, ≤ 0 o con más de 2 decimales |
+| -20201 | `e_cuenta_no_existe` | La cuenta de origen o de destino no existe |
+| -20202 | `e_cuentas_iguales` | Origen y destino son la misma cuenta |
+| -20203 | `e_cuenta_no_activa` | Origen o destino no está en estado `A` |
+| -20204 | `e_moneda_distinta` | La moneda no coincide con la de ambas cuentas |
+| -20205 | `e_saldo_insuficiente` | Saldo de origen menor que el monto |
+| -20206 | `e_referencia_duplicada` | Ya existe un movimiento con esa referencia |
+| -20207 | `e_referencia_obligatoria` | Referencia nula o vacía |
+| -20208 | `e_falla_simulada` | Falla provocada con `p_simular_falla = 'S'` después del débito y antes de la acreditación |
+| -20209 | `e_parametro_invalido` | Cuenta o moneda nula, o `p_simular_falla` distinto de `S`/`N` |
+| -20901 | `e_error_tecnico_liq` | Error inesperado envuelto, con el error Oracle original en el mensaje |
+
+### Casos de prueba del enunciado (`scripts/casos_c_manual.sql`)
+
+Ejecutar en orden. Saldos iniciales: `1910001000011` = 5250,00 y `1910002000017` = 350,50.
+
+| # | Operación | Resultado verificado | Saldos tras el caso | `CORE_TRX` |
+|---|---|---|---|---|
+| 1 | `1910001000011`→`1910002000017`, 100,00 PEN, `REF-T001` | Éxito (`trx_id` generado por `SEQ_CORE_TRX`) | 5150,00 / 450,50 | 1 fila nueva (TRF, Debe origen, Haber destino, flag `N`) |
+| 2 | Repetir con `REF-T001` | `ORA-20206` | sin cambios | sigue 1 fila `REF-T001` |
+| 3 | `1910002000017`→`1910001000011`, 5 000,00 PEN | `ORA-20205` (saldo 450,5) | sin cambios | sin fila |
+| 4 | `1910001000011`→`1910001000029`, 10,00 PEN | `ORA-20204` (destino USD) | sin cambios | sin fila |
+| 5 | `1910003000013`→`1910004000019`, 50,00 PEN | `ORA-20203` (destino bloqueada, estado `B`) | sin cambios | sin fila |
+| 6 | `1910001000011`→`1910002000017`, 100,00 PEN, `REF-T002`, falla simulada | `ORA-20208` | sin cambios (5150,00 / 450,50) | ninguna fila `REF-T002` |
+
+Después, `scripts/restablecer_casos_c.sql` devuelve los datos al estado original.
 
 ## Sección D: propuesta de mejora
 
