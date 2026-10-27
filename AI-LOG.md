@@ -54,7 +54,7 @@ Texto exacto de los mensajes del candidato, qué devolvió la herramienta y qué
 | 5 | «un catálogo inactivo no impide insertar ítems, porque el enunciado no lo pide. crear una regla. Realizar commit de A.3» | Nuevo código `-20107`, `validar_catalogo_activo`, pruebas V16/V17 y commit de A.3. | Decisión de negocio del candidato incorporada. |
 | 6 | «no me esta escribiendo nada en la vista de salida.» | Diagnóstico paso a paso del panel de salida de DBeaver. | El candidato activó la salida del servidor y las pruebas J1–J6 se vieron en DBeaver. |
 | 7 | «escribe los archivos faltantes y anota el registro de como estamos trabajando, en cada archivo correspondiente.» | README, STATUS, AI-LOG y `connection.env.example`. | Este archivo. |
-| 8 | «realiza el commit de los archivos y procede con la siguiente fase.» | Commit de la documentación y Fase C: `PKG_CORE_SETTLEMENT`, 16 casos automáticos, los 6 casos del enunciado y un script para restablecer datos. | Pendiente que el candidato los ejecute en DBeaver. |
+| 8 | «realiza el commit de los archivos y procede con la siguiente fase.» | Commit de la documentación y Fase C: `PKG_CORE_SETTLEMENT`, 16 casos automáticos, los 6 casos del enunciado y un script para restablecer datos. | El candidato verificó en DBeaver la prueba automática y los 6 casos (tras corregir el script automático, ver sección 5, punto 8). |
 
 Nota de transparencia (Fase C): para probar `casos_c_manual.sql` la IA lo ejecutó una vez en la base del candidato (con `COMMIT` del caso 1) y luego aplicó `restablecer_casos_c.sql`; los datos volvieron a 11 movimientos y saldos 5250,00 / 350,50. La secuencia `SEQ_CORE_TRX` ya no está en 1000 porque las secuencias no se revierten.
 
